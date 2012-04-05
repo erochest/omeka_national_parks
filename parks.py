@@ -23,6 +23,7 @@ import sys
 import time
 
 import rdflib
+import requests
 
 
 __version__ = '0.0'
@@ -44,17 +45,74 @@ else:
     timer = time.time
 
 
-# Some useful namespaces.
+##########################################
+## Some useful namespaces and constants ##
+##########################################
+
+
 CC    = rdflib.Namespace('http://creativecommons.org/ns#')
 FB    = rdflib.Namespace('http://rdf.freebase.com/ns/')
 XHTML = rdflib.Namespace('http://www.w3.org/1999/xhtml/vocab#')
 
 
+#######################
+## Walking the Graph ##
+#######################
+
+
+###################
+## Loading Files ##
+###################
+
+
+LAST_DOWNLOAD = 0
+def graph_parse(graph, uri, seconds=1):
+    """\
+    This throttles downloading resources to make sure we don't do more than
+    one a second.
+
+    Yucky global, but otherwise we'd need a superfluous class.
+
+    """
+
+    global LAST_DOWNLOAD
+
+    now = time.time()
+    elapsed = now - LAST_DOWNLOAD
+    if elapsed < seconds:
+        time.sleep(elapsed)
+    LAST_DOWNLOAD = now
+
+    return graph.parse(uri)
+
+
+####################################
+## Getting Data, Populating Omeka ##
+####################################
+
+
+def load_parks(args):
+    """\
+    This is the simple entry-point to processing. This populates the graph and
+    feeds all the information into Omeak.
+
+    """
+
+    uri = rdflib.URIRef(args.exhibit_url)
+
+    g = rdflib.Graph()
+    graph_parse(g, uri)
+
+
+####################
+## Infrastructure ##
+####################
+
+
 def parse_args(argv):
     """\
     This parses the command-line arguments in argv and returns a tuple
-    containing the options and other arguments.
-
+    containing the options and other arguments.  
     """
 
     op = argparse.ArgumentParser(
@@ -87,15 +145,15 @@ def parse_args(argv):
                          'choices are "quiet", "normal", and "verbose". '
                          'Default="%(default)s".')
 
-    (opts, args) = op.parse_args(argv)
+    args = op.parse_args(argv)
 
-    if (opts.exhibit_uri is None or opts.omeka_url is None or
-        opts.omeka_user is None or opts.omeka_passwd is None):
+    if (args.exhibit_uri is None or args.omeka_url is None or
+        args.omeka_user is None or args.omeka_passwd is None):
         op.error(
             'You must supply all of EXHIBIT_URI, OMEKA_USER, OMEKA_PASSWD.'
             )
 
-    return (opts, args)
+    return args
 
 
 def setup_logging(opts):
@@ -118,13 +176,12 @@ def setup_logging(opts):
 
 
 def main(argv=None):
-    (opts, args) = parse_args(argv or sys.argv[1:])
-    setup_logging(opts)
+    args = parse_args(argv or sys.argv[1:])
+    setup_logging(args)
     try:
         start = timer()
 
-        # TODO: implement functionality here
-        logging.info('hello, world!')
+        load_parks(args)
 
         end = timer()
         logging.info('done')
