@@ -11,16 +11,23 @@ conceivably, this could come from the configuration also.
 It uses the information in the triples returned to pull labels, descriptions,
 images, and coverage. If there are any Dublin Core metadata, these are also
 transfered into Omeka.
+
+Requires Python 2.7 with rdflib and requests installed.
 """
 
 
 import argparse
 import atexit
 import datetime
+from itertools import islice
 import logging
 import os
+import pprint
+import re
 import sys
 import time
+from urlparse import urljoin
+from xml.sax.saxutils import escape
 
 import rdflib
 import requests
@@ -53,6 +60,7 @@ else:
 CC    = rdflib.Namespace('http://creativecommons.org/ns#')
 FB    = rdflib.Namespace('http://rdf.freebase.com/ns/')
 XHTML = rdflib.Namespace('http://www.w3.org/1999/xhtml/vocab#')
+BLURB = 'http://www.freebase.com/api/trans/blurb/'
 
 
 #######################
@@ -83,7 +91,68 @@ def graph_parse(graph, uri, seconds=1):
         time.sleep(elapsed)
     LAST_DOWNLOAD = now
 
-    return graph.parse(uri)
+    logging.debug('downloading <%s>.' % uri)
+
+    start_size = len(graph)
+    result = graph.parse(uri)
+    end_size = len(graph)
+
+    logging.debug('downloaded %s triples.' % (end_size - start_size,))
+    return result
+
+
+################################
+## Graph Navigation Utilities ##
+################################
+
+
+def first(iterator, default=None):
+    """\
+    This takes an iterator and returns the first item or default, if the
+    iterator is empty.
+
+    """
+
+    try:
+        item = iter(iterator).next()
+    except StopIteration:
+        item = default
+
+    return item
+
+
+def has_subj(graph, uri):
+    """This tests whether graph has uri as a subject. """
+    return first(graph.triples((uri, None, None))) is not None
+
+
+def drill(graph, uri, predicates, n=0):
+    """\
+    This follows a series predicates through the graph and returns an iterator
+    over the final targets.
+
+    At each step, it makes sure that the target is in the graph. If it's not,
+    it attempts to load it. If at any point, there is no target for a
+    predicate, an empty iterator is returned.
+
+    """
+
+    if n >= len(predicates):
+        yield uri
+        return
+
+    if not has_subj(graph, uri):
+        graph_parse(graph, uri)
+
+    p = predicates[n]
+    n += 1
+    for o in graph.objects(uri, p):
+        for target in drill(graph, o, predicates, n):
+            yield target
+
+def isa(graph, uri, rdf_type):
+    """This tests whether the uri is defined to have RDF#type. """
+    return first(graph.triples((uri, rdflib.RDF.type, rdf_type))) is not None
 
 
 ####################################
@@ -98,10 +167,75 @@ def load_parks(args):
 
     """
 
-    uri = rdflib.URIRef(args.exhibit_url)
+    uri = rdflib.URIRef(args.exhibit_uri)
 
     g = rdflib.Graph()
     graph_parse(g, uri)
+
+    omeka_url = args.omeka_url
+    if omeka_url[-1] != '/':
+        omeka_url += '/'
+
+    cookies = login(omeka_url, args.omeka_user, args.omeka_passwd)
+    populate_exhibit(g, uri, omeka_url, cookies)
+
+
+def login(omeka_url, user, passwd):
+    """This logs into the Omeka admin site and returns the cookies. """
+    url  = urljoin(omeka_url, 'admin/users/login')
+    auth = {
+            'username': user,
+            'password': passwd,
+            'remember': '1',
+            }
+
+    logging.info('logging into %s' % (url,))
+    resp = requests.post(url, data=auth)
+    assert resp.ok, 'login: %s' % (resp.status_code,)
+    return resp.cookies
+
+
+def populate_exhibit(graph, uri, omeka_url, cookies):
+    """\
+    This takes an RDF graph, and entry URI, and information about an Omeka
+    installation, and it creates an exhibit with the items from the graph in
+    it.
+
+    """
+
+    data = {}
+
+    # title
+    # slug
+    for o in graph.objects(uri, FB['type.object.name']):
+        if getattr(o, 'language', None) == u'en':
+            data['title'] = unicode(o)
+            data['slug']  = re.sub(r'\W', '-', o.lower())
+
+    # credit
+    for (aurl, name) in zip(graph.objects(uri, CC['attributionURL']),
+                            graph.objects(uri, CC['attributionName'])):
+        data['credits'] = "<a href='%s'>%s</a>" % (aurl, escape(name))
+
+    # description
+    for o in graph.objects(uri, FB['common.topic.article']):
+        if isa(graph, o, FB['common.document']):
+            blurb = urljoin(BLURB, o.rsplit('/', 1)[-1].replace('.', '/'))
+            resp = requests.get(blurb, params={ 'maxlength': '6400' })
+            if resp.ok:
+                data['description'] = resp.text
+            else:
+                logging.debug(
+                        'trying to download the description. status = %s' % (
+                            resp.status_code,)
+                        )
+
+    exhibit_add = urljoin(omeka_url, 'admin/exhibits/add')
+    resp = requests.post(exhibit_add, cookies=cookies, data=data)
+
+    logging.info('created exhibit: %(title)s' % data)
+    logging.debug(pprint.pformat(data))
+    logging.debug('response: %s %s' % (resp.status_code, resp.url))
 
 
 ####################
