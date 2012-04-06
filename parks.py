@@ -106,6 +106,12 @@ def graph_parse(graph, uri, seconds=1):
 ################################
 
 
+def ensure(graph, uri):
+    """This makes sure that there are statements with uri as the subject. """
+    if not has_subj(graph, uri):
+        graph_parse(graph, uri)
+
+
 def first(iterator, default=None):
     """\
     This takes an iterator and returns the first item or default, if the
@@ -141,8 +147,7 @@ def drill(graph, uri, predicates, n=0):
         yield uri
         return
 
-    if not has_subj(graph, uri):
-        graph_parse(graph, uri)
+    ensure(graph, uri)
 
     p = predicates[n]
     n += 1
@@ -213,12 +218,12 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
             data['slug']  = re.sub(r'\W', '-', o.lower())
 
     # credit
-    for (aurl, name) in zip(graph.objects(uri, CC['attributionURL']),
-                            graph.objects(uri, CC['attributionName'])):
-        data['credits'] = "<a href='%s'>%s</a>" % (aurl, escape(name))
+    for name in graph.objects(uri, CC['attributionName']):
+        data['credits'] = name
 
     # description
     for o in graph.objects(uri, FB['common.topic.article']):
+        ensure(graph, o)
         if isa(graph, o, FB['common.document']):
             blurb = urljoin(BLURB, o.rsplit('/', 1)[-1].replace('.', '/'))
             resp = requests.get(blurb, params={ 'maxlength': '6400' })
