@@ -40,10 +40,10 @@ LOG_FORMAT = (
     '%(asctime)s [%(levelname)s] %(name)s : %(message)s'
     )
 LOG_LEVELS = {
-    'very-quiet': logging.CRITICAL,
-    'quiet': logging.WARNING,
-    'normal': logging.INFO,
-    'verbose': logging.DEBUG,
+    'very-quiet' : logging.CRITICAL,
+    'quiet'      : logging.WARNING,
+    'normal'     : logging.INFO,
+    'verbose'    : logging.DEBUG,
     }
 
 if sys.platform == 'win32':
@@ -61,6 +61,10 @@ CC    = rdflib.Namespace('http://creativecommons.org/ns#')
 FB    = rdflib.Namespace('http://rdf.freebase.com/ns/')
 XHTML = rdflib.Namespace('http://www.w3.org/1999/xhtml/vocab#')
 BLURB = 'http://www.freebase.com/api/trans/blurb/'
+
+LOG      = None
+LOGRDF   = None
+LOGOMEKA = None
 
 
 #######################
@@ -91,13 +95,13 @@ def graph_parse(graph, uri, seconds=1):
         time.sleep(elapsed)
     LAST_DOWNLOAD = now
 
-    logging.debug('downloading <%s>.' % uri)
+    LOGRDF.debug('downloading <%s>.' % uri)
 
     start_size = len(graph)
     result = graph.parse(uri)
     end_size = len(graph)
 
-    logging.debug('downloaded %s triples.' % (end_size - start_size,))
+    LOGRDF.debug('downloaded %s triples.' % (end_size - start_size,))
     return result
 
 
@@ -194,7 +198,7 @@ def login(omeka_url, user, passwd):
             'remember': '1',
             }
 
-    logging.info('logging into %s' % (url,))
+    LOGOMEKA.info('logging into %s' % (url,))
     resp = requests.post(url, data=auth)
     assert resp.ok, 'login: %s' % (resp.status_code,)
     return resp.cookies
@@ -230,7 +234,7 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
             if resp.ok:
                 data['description'] = resp.text
             else:
-                logging.debug(
+                LOGRDF.debug(
                         'trying to download the description. status = %s' % (
                             resp.status_code,)
                         )
@@ -238,9 +242,9 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
     exhibit_add = urljoin(omeka_url, 'admin/exhibits/add')
     resp = requests.post(exhibit_add, cookies=cookies, data=data)
 
-    logging.info('created exhibit: %(title)s' % data)
-    logging.debug(pprint.pformat(data))
-    logging.debug('response: %s %s' % (resp.status_code, resp.url))
+    LOGOMEKA.info('created exhibit: %(title)s' % data)
+    LOGOMEKA.debug(pprint.pformat(data))
+    LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
 
 
 ####################
@@ -302,6 +306,8 @@ def setup_logging(opts):
 
     """
 
+    global LOG, LOGRDF, LOGOMEKA
+
     logging.basicConfig()
     logger = logging.getLogger()
     logger.setLevel(LOG_LEVELS[opts.log_level])
@@ -312,6 +318,10 @@ def setup_logging(opts):
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logger.addHandler(handler)
     atexit.register(logging.shutdown)
+
+    LOG      = logging.getLogger('parks')
+    LOGRDF   = logging.getLogger('parks.rdf')
+    LOGOMEKA = logging.getLogger('parks.omeka')
 
 
 def main(argv=None):
