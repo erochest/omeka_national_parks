@@ -12,7 +12,7 @@ It uses the information in the triples returned to pull labels, descriptions,
 images, and coverage. If there are any Dublin Core metadata, these are also
 transfered into Omeka.
 
-Requires Python 2.7 with rdflib and requests installed.
+Requires Python 2.7 with rdflib, requests, and pyproj installed.
 """
 
 
@@ -29,6 +29,7 @@ import time
 from urlparse import urljoin
 from xml.sax.saxutils import escape
 
+import pyproj
 import rdflib
 import requests
 
@@ -65,6 +66,12 @@ BLURB = 'http://www.freebase.com/api/trans/blurb/'
 LOG      = None
 LOGRDF   = None
 LOGOMEKA = None
+
+GOOGLE = pyproj.Proj(
+        '+proj=merc +a=6378137 +b=6378137 +lat_ts=0.0 '
+         '+lon_0=0.0 +x_0=0.0 +y_0=0 +k=1.0 +units=m '
+         '+nadgrids=@null +no_defs'
+         )
 
 
 #######################
@@ -165,6 +172,28 @@ def isa(graph, uri, rdf_type):
     return first(graph.triples((uri, rdflib.RDF.type, rdf_type))) is not None
 
 
+def get_listed_sites(graph, uri):
+    """\
+    This looks for fb:protected_sites.site_listing_category.listed_sites and
+    gets those graphs. It returns the URI for the child graphs.
+
+    """
+
+    SITES = FB['base.usnationalparks.nps_classification.classification']
+    for child in graph.objects(uri, SITES):
+        ensure(graph, child)
+        yield child
+
+
+def predicates(graph, uri):
+    """\
+    This returns an ordered list of the set of predicates edges from this uri.
+
+    """
+
+    return sorted(set( p for (p, _) in graph.predicate_objects(uri) ))
+
+
 ####################################
 ## Getting Data, Populating Omeka ##
 ####################################
@@ -227,18 +256,9 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
         data['credits'] = name
 
     # description
-    for o in graph.objects(uri, FB['common.topic.article']):
-        ensure(graph, o)
-        if isa(graph, o, FB['common.document']):
-            blurb = urljoin(BLURB, o.rsplit('/', 1)[-1].replace('.', '/'))
-            resp = requests.get(blurb, params={ 'maxlength': '6400' })
-            if resp.ok:
-                data['description'] = resp.text
-            else:
-                LOGRDF.debug(
-                        'trying to download the description. status = %s' % (
-                            resp.status_code,)
-                        )
+    descr = get_topic_article(graph, uri)
+    if descr is not None:
+        data['description'] = descr
 
     exhibit_add = urljoin(omeka_url, 'admin/exhibits/add')
     resp = requests.post(exhibit_add, cookies=cookies, data=data)
@@ -246,6 +266,128 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
     LOGOMEKA.info('created exhibit: %(title)s' % data)
     LOGOMEKA.debug(pprint.pformat(data))
     LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
+
+    items = [
+            populate_item(graph, child_uri, omeka_url, cookies)
+            for child_uri in get_listed_sites(graph, uri)
+            ]
+
+
+def populate_field(graph, uri, predicate, params, element_id, language=None,
+                   html=False):
+    """\
+    This queries the field and loads the objects of (uri, predicate) into the
+    parameters. If the language option is given (i.e., not None), then only
+    values with a matching language property will be used.
+
+    """
+
+    text_key = 'Elements[%d][0][text]' % (element_id,)
+    html_key = 'Elements[%d][0][html]' % (element_id,)
+    for o in graph.objects(uri, predicate):
+        if language is None or getattr(o, 'language', None) == language:
+            params[text_key] = unicode(o)
+            params[html_key] = (html and '1') or '0'
+
+
+def populate_item(graph, uri, omeka_url, cookies):
+    """\
+    This creates an item for the URI and returns the Omeka admin URL for it.
+
+    """
+
+    params = {}
+
+    # title
+    populate_field(graph, uri, FB['type.object.name'], params, 50, u'en')
+    title = params.get('Elements[50][0][text]', '???')
+
+    # subject (Elements[49]...)
+    types = [
+            u'<a href="%s">%s</a>' % (o, o.split(u'/')[-1])
+            for o in graph.objects(uri, rdflib.RDF.type)
+            ]
+    params['Elements[49][0][text]'] = ', '.join(types)
+    params['Elements[49][0][html]'] = '1' 
+
+    # description
+    descr = get_topic_article(graph, uri)
+    if descr is not None:
+        params['Elements[41][0][text]'] = descr
+        params['Elements[41][0][html]'] = '0'
+
+    # source
+    populate_field(graph, uri, CC['attributionName'], params, 48)
+
+    # date
+    populate_field(graph, uri,
+                   FB['protected_sites.protected_site.date_established'],
+                   params, 40)
+
+    # rights
+    populate_field(graph, uri, XHTML['license'], params, 47)
+
+    # identifier
+    params['Elements[43][0][text]'] = uri
+    params['Elements[43][0][html]'] = '0'
+
+    # coverage
+    populate_coverage(graph, uri, title, params)
+
+    # submit
+    item_add = urljoin(omeka_url, 'admin/items/add')
+    resp = requests.post(item_add, cookies=cookies, data=params)
+
+    LOGOMEKA.info('created item: %(Elements[50][0][text])s' % params)
+    LOGOMEKA.info(pprint.pformat(params))
+    LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
+
+
+def populate_coverage(graph, uri, title, params):
+    """This populates a coverage field. """
+    for o_ in graph.objects(uri, FB['location.location.geolocation']):
+        ensure(graph, o_)
+
+        lon = lat = None
+        for (p, o) in graph.predicate_objects(o_):
+            if p == FB['location.geocode.longitude']:
+                lon = float(o)
+            elif p == FB['location.geocode.latitude']:
+                lat = float(o)
+
+        if lon is not None and lat is not None:
+            (x, y) = GOOGLE(lon, lat)
+            wkt    = 'POINT(%f %f)' % (x, y)
+
+            params['Elements[38][0][wkt]']        = wkt
+            params['Elements[38][0][zoom]']       = '10'
+            params['Elements[38][0][center_lon]'] = str(x)
+            params['Elements[38][0][center_lat]'] = str(y)
+            params['Elements[38][0][base_layer]'] = '1'
+            params['Elements[38][0][text]']       = '%s/10/%f/%f/gphy\n%s' % (
+                    wkt, x, y, title,
+                    )
+            params['Elements[38][0][html]']       = '0'
+            params['Elements[38][0][mapon]']      = '1'
+
+
+def get_topic_article(graph, uri):
+    """This downloads and returns the fb:common.topic.article for the item. """
+    text = None
+
+    for o in graph.objects(uri, FB['common.topic.article']):
+        ensure(graph, o)
+        if isa(graph, o, FB['common.document']):
+            blurb = urljoin(BLURB, o.rsplit('/', 1)[-1].replace('.', '/'))
+            resp = requests.get(blurb, params={ 'maxlength': '6400' })
+            if resp.ok:
+                text = resp.text
+            else:
+                LOGRDF.debug(
+                        'trying to download the description. status = %s' % (
+                            resp.status_code,))
+
+    return text
 
 
 ####################
@@ -307,8 +449,6 @@ def setup_logging(opts):
 
     """
 
-    global LOG, LOGRDF, LOGOMEKA
-
     config = {}
     if opts.log_file == 'STDOUT' or opts.log_file == '-':
         config['stream'] = sys.stdout
@@ -321,6 +461,12 @@ def setup_logging(opts):
     logging.basicConfig(**config)
     atexit.register(logging.shutdown)
 
+    attach_loggers()
+
+
+def attach_loggers():
+    """This attaches the appropriate loggers to the global variables. """
+    global LOG, LOGRDF, LOGOMEKA
     LOG      = logging.getLogger('parks')
     LOGRDF   = logging.getLogger('parks.rdf')
     LOGOMEKA = logging.getLogger('parks.omeka')
