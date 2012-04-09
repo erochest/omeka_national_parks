@@ -159,6 +159,7 @@ def drill(graph, uri, predicates, n=0):
         for target in drill(graph, o, predicates, n):
             yield target
 
+
 def isa(graph, uri, rdf_type):
     """This tests whether the uri is defined to have RDF#type. """
     return first(graph.triples((uri, rdflib.RDF.type, rdf_type))) is not None
@@ -308,15 +309,16 @@ def setup_logging(opts):
 
     global LOG, LOGRDF, LOGOMEKA
 
-    logging.basicConfig()
-    logger = logging.getLogger()
-    logger.setLevel(LOG_LEVELS[opts.log_level])
-    if opts.log_file == 'STDOUT':
-        handler = logging.StreamHandler(sys.stdout)
+    config = {}
+    if opts.log_file == 'STDOUT' or opts.log_file == '-':
+        config['stream'] = sys.stdout
+    elif opts.log_file == 'STDERR':
+        config['stream'] = sys.stderr
     else:
-        handler = logging.FileHandler(opts.log_file)
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    logger.addHandler(handler)
+        config['filename'] = opts.log_file
+    config['level'] = LOG_LEVELS[opts.log_level]
+
+    logging.basicConfig(**config)
     atexit.register(logging.shutdown)
 
     LOG      = logging.getLogger('parks')
