@@ -15,6 +15,12 @@ transfered into Omeka.
 Requires Python 2.7 with rdflib, requests, and pyproj installed.
 """
 
+# TODO: Would be nice to serialize the graph afterward and be able to use that
+# on subsequent runs.
+#
+# TODO: If fb:location.location.geolocation doesn't exist, this should look at
+# owl:sameAs to see if any of them are geo-encoded.
+
 
 import argparse
 import atexit
@@ -267,10 +273,10 @@ def populate_exhibit(graph, uri, omeka_url, cookies):
     LOGOMEKA.debug(pprint.pformat(data))
     LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
 
-    items = [
-            populate_item(graph, child_uri, omeka_url, cookies)
-            for child_uri in get_listed_sites(graph, uri)
-            ]
+    for child_uri in get_listed_sites(graph, uri):
+        populate_item(graph, child_uri, omeka_url, cookies)
+
+    LOGOMEKA.info('done with exhibit items')
 
 
 def populate_field(graph, uri, predicate, params, element_id, language=None,
@@ -302,7 +308,7 @@ def populate_item(graph, uri, omeka_url, cookies):
     populate_field(graph, uri, FB['type.object.name'], params, 50, u'en')
     title = params.get('Elements[50][0][text]', '???')
 
-    # subject (Elements[49]...)
+    # subject
     types = [
             u'<a href="%s">%s</a>' % (o, o.split(u'/')[-1])
             for o in graph.objects(uri, rdflib.RDF.type)
@@ -328,7 +334,7 @@ def populate_item(graph, uri, omeka_url, cookies):
     populate_field(graph, uri, XHTML['license'], params, 47)
 
     # identifier
-    params['Elements[43][0][text]'] = uri
+    params['Elements[43][0][text]'] = unicode(uri)
     params['Elements[43][0][html]'] = '0'
 
     # coverage
@@ -361,9 +367,9 @@ def populate_coverage(graph, uri, title, params):
 
             params['Elements[38][0][wkt]']        = wkt
             params['Elements[38][0][zoom]']       = '10'
-            params['Elements[38][0][center_lon]'] = str(x)
-            params['Elements[38][0][center_lat]'] = str(y)
-            params['Elements[38][0][base_layer]'] = '1'
+            params['Elements[38][0][center_lon]'] = unicode(x)
+            params['Elements[38][0][center_lat]'] = unicode(y)
+            params['Elements[38][0][base_layer]'] = 'gphy'
             params['Elements[38][0][text]']       = '%s/10/%f/%f/gphy\n%s' % (
                     wkt, x, y, title,
                     )
