@@ -24,6 +24,10 @@ Requires Python 2.7 with rdflib, requests, and pyproj installed.
 
 import argparse
 import atexit
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
 import datetime
 from itertools import islice
 import logging
@@ -68,6 +72,7 @@ CC    = rdflib.Namespace('http://creativecommons.org/ns#')
 FB    = rdflib.Namespace('http://rdf.freebase.com/ns/')
 XHTML = rdflib.Namespace('http://www.w3.org/1999/xhtml/vocab#')
 BLURB = 'http://www.freebase.com/api/trans/blurb/'
+IMG   = 'http://www.freebase.com/api/trans/raw/'
 
 LOG      = None
 LOGRDF   = None
@@ -340,13 +345,54 @@ def populate_item(graph, uri, omeka_url, cookies):
     # coverage
     populate_coverage(graph, uri, title, params)
 
+    # image file
+    files = {}
+    for (n, img_uri) in enumerate(graph.objects(uri, FB['common.topic.image'])):
+        ensure(graph, img_uri)
+        populate_file(graph, n, img_uri, files)
+
     # submit
+    LOGOMEKA.debug('creating item: %(Elements[50][0][text])s' % params)
+    LOGOMEKA.debug('params: ' + pprint.pformat(params))
+    LOGOMEKA.debug('files : ' + pprint.pformat(files))
+
     item_add = urljoin(omeka_url, 'admin/items/add')
-    resp = requests.post(item_add, cookies=cookies, data=params)
+    resp = requests.post(item_add, cookies=cookies, data=params, files=files,
+                         allow_redirects=False,
+                         config={ 'verbose': sys.stderr })
 
     LOGOMEKA.info('created item: %(Elements[50][0][text])s' % params)
-    LOGOMEKA.info(pprint.pformat(params))
     LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
+
+
+def populate_file(graph, n, uri, files):
+    """\
+    This adds information about a file from an fb:common.image graph node.
+
+    The file is read and the data inserted into a files dict for passing into
+    the request.
+
+    """
+
+    gid     = uri.rsplit(u'/', 1)[-1]
+    raw_uri = IMG + gid.replace(u'.', u'/')
+
+    name = gid
+    for o in graph.objects(uri, FB['type.object.name']):
+        lang = getattr(o, 'language', None)
+        if lang is None or lang == u'en':
+            name = unicode(o)
+
+    for o in graph.objects(uri, FB['type.content.media_type']):
+        if o.endswith(u'.jpeg') and (not name.endswith(u'.jpg') or
+                                     not name.endswith(u'.jpeg')):
+            name += '.jpg'
+        elif o.endswith(u'.png') and not name.endswith(u'.png'):
+            name += '.png'
+
+    resp       = requests.get(raw_uri)
+    key        = 'file[%d]' % (n,)
+    files[key] = (name, StringIO(resp.content))
 
 
 def populate_coverage(graph, uri, title, params):
