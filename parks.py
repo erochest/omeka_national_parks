@@ -359,7 +359,8 @@ def populate_item(graph, uri, omeka_url, cookies):
     item_add = urljoin(omeka_url, 'admin/items/add')
     resp = requests.post(item_add, cookies=cookies, data=params, files=files,
                          allow_redirects=False,
-                         config={ 'verbose': sys.stderr })
+                         # config={ 'verbose': sys.stderr },
+                         )
 
     LOGOMEKA.info('created item: %(Elements[50][0][text])s' % params)
     LOGOMEKA.debug('response: %s %s' % (resp.status_code, resp.url))
