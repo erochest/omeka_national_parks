@@ -309,6 +309,9 @@ def populate_item(graph, uri, omeka_url, cookies):
 
     params = {}
 
+    # public
+    params['public'] = ['0', '1']
+
     # title
     populate_field(graph, uri, FB['type.object.name'], params, 50, u'en')
     title = params.get('Elements[50][0][text]', '???')
