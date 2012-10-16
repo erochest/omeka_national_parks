@@ -401,7 +401,11 @@ def populate_file(graph, n, uri, files):
 
 def populate_coverage(graph, uri, title, params):
     """This populates a coverage field. """
-    for o_ in graph.objects(uri, FB['location.location.geolocation']):
+    geolocs = list(graph.objects(uri, FB['location.location.geolocation']))
+    LOGRDF.debug(
+            'Downloaded geolocation information: {0}.'.format(geolocs)
+            )
+    for o_ in geolocs:
         ensure(graph, o_)
 
         lon = lat = None
@@ -415,7 +419,7 @@ def populate_coverage(graph, uri, title, params):
             (x, y) = GOOGLE(lon, lat)
             wkt    = 'POINT(%f %f)' % (x, y)
 
-            params['Elements[38][0][wkt]']        = wkt
+            params['Elements[38][0][geo]']        = wkt
             params['Elements[38][0][zoom]']       = '10'
             params['Elements[38][0][center_lon]'] = unicode(x)
             params['Elements[38][0][center_lat]'] = unicode(y)
